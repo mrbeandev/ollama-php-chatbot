@@ -1,16 +1,14 @@
 <?php
 /**
- * Ollama PHP Chatbot
+ * Ollama PHP Chat Interface
  *
- * This file contains the implementation of the Ollama PHP Chatbot.
- * The chatbot is designed to handle user interactions and provide
- * appropriate responses based on the input received.
- * 
- * Conversations are saved daily in files named with the format (yyyy-mm-dd.txt)
+ * This script serves as the main entry point for the Ollama PHP Chat interface.
+ * It handles API requests, manages the chat UI, and interacts with the Ollama class.
  *
- * @package OllamaPHPChatbot
- * @version 1.0
- * @license MIT License
+ * @package OllamaPHPChat
+ * @version 1.0.0
+ * @author Your Name
+ * @license MIT
  */
 ini_set('display_errors', 1);
 error_reporting(E_ALL);
@@ -38,17 +36,33 @@ $conversation_file = "$markdown_dir/$current_date.txt";
 // Handle incoming messages
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $data = json_decode(file_get_contents('php://input'), true);
+
+    // Handle actions (like unload)
+    if (isset($data['action'])) {
+        try {
+            $result = $ollama->handleAction($data['action'], $data['model']);
+            echo json_encode(['success' => true, 'message' => 'Action completed successfully']);
+        } catch (Exception $e) {
+            error_log('Error handling action: ' . $e->getMessage());
+            echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+        }
+        exit;
+    }
+
+    // Handle chat messages
     if (isset($data['model']) && isset($data['message'])) {
         $selected_model = htmlspecialchars($data['model']);
         $message = htmlspecialchars($data['message']);
-        
+        $context = isset($data['context']) ? htmlspecialchars($data['context']) : '';
+        $template = isset($data['template']) ? htmlspecialchars($data['template']) : 'general';
+
         try {
-            $response = $ollama->generateResponse($selected_model, $message);
-            
+            $response = $ollama->generateResponse($selected_model, $message, $context, $template);
+
             // Append the conversation to the markdown file without HTML color tags
-            $conversation = "\n----\n\n### $message\n\n".strtoupper($selected_model).":\n\n$response\n\n\n";
+            $conversation = "\n----\n\n### $message\n\n" . strtoupper($selected_model) . ":\n\n$response\n\n\n";
             file_put_contents($conversation_file, $conversation, FILE_APPEND);
-            
+
             echo json_encode(['success' => true, 'response' => $response]);
         } catch (Exception $e) {
             error_log('Error in index.php: ' . $e->getMessage());
@@ -57,7 +71,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
 }
-
 
 // List all the models
 $model_list = $ollama->getModelList();
@@ -73,215 +86,178 @@ if ($default_model_key !== false) {
 // Get debug information if in debug mode
 $debug_info = $debug_mode ? $ollama->getDebugInfo() : null;
 ?>
-
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="h-full">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ollama-php-chatbot</title>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/default.min.css">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/highlight.min.js"></script>
+    <title>Ollama Chat Interface</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/@mdi/font@7.2.96/css/materialdesignicons.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <style>
-        :root {
-            --bg-color: #deddda;
-            --text-color: #333;
-            --chat-bg: #e8e8e8;
-            --code-bg: #f4f4f4;
-            --user-message-color: #800000;
+    <script src="js/chat.js" defer></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#2563eb',
+                        secondary: '#4f46e5',
+                    }
+                }
+            }
+        }
+    </script>
+    <style type="text/tailwindcss">
+        @layer utilities {
+            .scrollbar-custom {
+                scrollbar-width: thin;
+                scrollbar-color: rgba(156, 163, 175, 0.5) transparent;
+            }
+            .scrollbar-custom::-webkit-scrollbar {
+                width: 6px;
+            }
+            .scrollbar-custom::-webkit-scrollbar-track {
+                background: transparent;
+            }
+            .scrollbar-custom::-webkit-scrollbar-thumb {
+                background-color: rgba(156, 163, 175, 0.5);
+                border-radius: 3px;
+            }
         }
 
-        [data-theme="dark"] {
-            --bg-color: #333;
-            --text-color: #f4f4f4;
-            --chat-bg: #444;
-            --code-bg: #222;
-            --user-message-color: #ff6b6b;
+        .mobile-menu-btn {
+            @apply fixed top-4 left-4 z-50 py-1 px-2 bg-gray-800 dark:bg-gray-700 
+                   text-white rounded-md lg:hidden shadow-lg 
+                   hover:bg-gray-700 dark:hover:bg-gray-600 
+                   transition-all duration-200 ease-in-out;
         }
 
-        body { 
-            background-color: var(--bg-color); 
-            color: var(--text-color);
-            font-family: Arial, sans-serif; 
-            margin: 0; 
-            padding: 0; 
-            height: 94vh; 
-            display: flex; 
-            flex-direction: column; 
+        .sidebar-mobile {
+            @apply fixed inset-y-0 left-0 z-40 w-64 transform -translate-x-full 
+                   transition-transform duration-300 ease-in-out lg:static 
+                   lg:transform-none bg-white dark:bg-gray-800 border-r 
+                   border-gray-200 dark:border-gray-700 shadow-lg;
         }
-        .container { 
-            min-width: 90%; 
-            margin: 0 auto; 
-            padding: 20px; 
-            flex-grow: 1; 
-            display: flex; 
-            flex-direction: column; 
+
+        .sidebar-mobile.open {
+            @apply translate-x-0 shadow-2xl;
         }
-        @media (max-width: 768px) { .container { max-width: 100%; } }
-        #chat-window { 
-            background-color: var(--chat-bg); 
-            flex-grow: 1; 
-            border: 1px solid #ccc; 
-            overflow-y: scroll; 
-            padding: 10px; 
-            margin-bottom: 10px; 
+
+        /* Add overlay for mobile menu */
+        .mobile-menu-overlay {
+            @apply fixed inset-0 bg-black/50 lg:hidden;
+            display: none;
         }
-        #chat-input { 
-            width: 94%; 
-            padding: 10px; 
-            margin-bottom: 10px; 
-            background-color: var(--bg-color);
-            color: var(--text-color);
-            border: 1px solid var(--text-color);
-        }
-        #send-chat, #change-model { padding: 10px 20px; }
-        #model-select { 
-            padding: 10px; 
-            margin-bottom: 10px; 
-            background-color: var(--bg-color);
-            color: var(--text-color);
-            border: 1px solid var(--text-color);
-        }
-        .error { color: red; }
-        .user-message { color: var(--user-message-color); }
-        pre { background-color: var(--code-bg); padding: 10px; border-radius: 5px; }
-        code { font-family: 'Courier New', Courier, monospace; }
-        #theme-toggle {
-            position: fixed;
-            top: 20px;
-            right: 0px;
-            background: none;
-            border: none;
-            font-size: 16px;
-            cursor: pointer;
-        }
-        #debug-info {
-            background-color: var(--chat-bg);
-            border: 1px solid var(--text-color);
-            padding: 10px;
-            margin-top: 20px;
-            white-space: pre-wrap;
-            font-family: monospace;
+
+        .mobile-menu-overlay.active {
+            display: block;
         }
     </style>
 </head>
-<body>
-    <button id="theme-toggle">💡</button>
-    <div class="container">
-        <select id="model-select">
-            <?php foreach ($model_list as $model): ?>
-                <option value="<?= htmlspecialchars($model['name']) ?>"><?= htmlspecialchars($model['name']) ?></option>
-            <?php endforeach; ?>
-        </select>
-        
-        <div id="chat-window"></div>
-        <textarea id="chat-input" placeholder="Type a message"  rows="13"></textarea>
-        <button id="send-chat">Send</button>
 
-        <?php if ($debug_mode && $debug_info): ?>
-            <div id="debug-info">
-                <h3>Debug Information:</h3>
-                <pre><?= htmlspecialchars(print_r($debug_info, true)) ?></pre>
+<body class="h-full bg-gray-50 dark:bg-gray-900">
+    <!-- Mobile Menu Overlay -->
+    <div id="mobile-menu-overlay" class="mobile-menu-overlay"></div>
+
+    <!-- Mobile Menu Button -->
+    <button id="mobile-menu-btn" class="mobile-menu-btn">
+        <span class="mdi mdi-menu text-xl"></span>
+    </button>
+
+    <div class="flex h-full">
+        <!-- Sidebar with mobile classes -->
+        <aside class="sidebar-mobile bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex flex-col">
+            <div class="p-4 border-b border-gray-200 dark:border-gray-700">
+                <h1 class="text-xl font-semibold text-gray-800 dark:text-white">Ollama Chat</h1>
             </div>
-        <?php endif; ?>
+
+            <!-- Model Selection -->
+            <div class="p-4 space-y-4">
+                <div class="space-y-2">
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">Model</label>
+                    <select id="model-select" class="w-full rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 px-3 py-2 text-sm">
+                        <?php foreach ($model_list as $model):
+                            $modelInfo = $ollama->getModelInfo($model['name']);
+                            $details = isset($modelInfo['details']) ?
+                                " ({$modelInfo['details']['parameter_size']}, {$modelInfo['details']['quantization_level']})" : '';
+                        ?>
+                            <option value="<?= htmlspecialchars($model['name']) ?>">
+                                <?= htmlspecialchars($model['name']) . $details ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+
+                <!-- Model Controls -->
+                <div class="space-y-2">
+                    <button id="unload-model" class="w-full px-3 py-2 text-sm text-white bg-red-600 hover:bg-red-700 rounded-md">
+                        Unload Model
+                    </button>
+                    <button id="clear-chat" class="w-full px-3 py-2 text-sm text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-md">
+                        Clear Chat
+                    </button>
+                </div>
+
+                <!-- Prompt Templates -->
+                <div class="space-y-2">
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">Template</label>
+                    <select id="prompt-template" class="w-full rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 px-3 py-2 text-sm">
+                        <option value="">No Template</option>
+                        <?php foreach ($ollama->getPromptTemplates() as $template): ?>
+                            <option value="<?= htmlspecialchars($template) ?>"><?= ucfirst($template) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Theme Toggle -->
+            <div class="mt-auto p-4 border-t border-gray-200 dark:border-gray-700">
+                <button id="theme-toggle" class="w-full flex items-center justify-center px-3 py-2 text-sm text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-md">
+                    <span class="mdi mdi-theme-light-dark mr-2"></span>
+                    <span id="theme-label">Toggle Theme</span>
+                </button>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="flex-1 flex flex-col h-full">
+            <!-- Chat Window -->
+            <div id="chat-window" class="flex-1 p-4 overflow-y-auto scrollbar-custom space-y-4">
+                <!-- Messages will be inserted here -->
+            </div>
+
+            <!-- Input Area -->
+            <div class="border-t border-gray-200 dark:border-gray-700 p-4 space-y-4">
+                <textarea id="context-input"
+                    class="w-full px-3 py-2 text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-md"
+                    rows="2"
+                    placeholder="Add context here (optional)"></textarea>
+
+                <div class="flex space-x-2">
+                    <textarea id="chat-input"
+                        class="flex-1 px-3 py-2 text-sm text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-md"
+                        rows="3"
+                        placeholder="Type your message..."></textarea>
+                    <button id="send-chat" class="px-4 py-2 bg-primary hover:bg-primary/90 text-white rounded-md flex items-center justify-center">
+                        <span class="mdi mdi-send"></span>
+                    </button>
+                </div>
+            </div>
+        </main>
     </div>
 
-    <script>
-        const chatWindow = document.getElementById('chat-window');
-        const chatInput = document.getElementById('chat-input');
-        const sendButton = document.getElementById('send-chat');
-        const modelSelect = document.getElementById('model-select');
-        const themeToggle = document.getElementById('theme-toggle');
-        let currentModel = modelSelect.value; // Set default model to the first option (Llama3.1)
-
-        function appendMessage(sender, message, isError = false, isUser = false) {
-            const messageDiv = document.createElement('div');
-            if (isUser) {
-                message = message.replace(/\r\n|\n/g, '<br>');
-                messageDiv.innerHTML = `<br><hr><br><span class="user-message">${message}</span>`;
-            } else {
-                messageDiv.innerHTML = `<strong>${sender.toUpperCase()}:</strong> ${marked.parse(message)}`;
-            }
-            if (isError) {
-                messageDiv.classList.add('error');
-            }
-            chatWindow.appendChild(messageDiv);
-            chatWindow.appendChild(document.createElement('br')); // Add a line break after each message
-            chatWindow.scrollTop = chatWindow.scrollHeight;
-            hljs.highlightAll();
-        }
-
-        function sendMessage() {
-            const message = chatInput.value.trim();
-            if (message) {
-                appendMessage('Usuario', message, false, true);
-                chatInput.value = '';
-
-                fetch('index.php', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ model: currentModel, message: message }),
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.success) {
-                        appendMessage(currentModel, data.response);
-                    } else {
-                        appendMessage('Error', data.error, true);
-                    }
-                })
-                .catch(error => {
-                    console.error('Error:', error);
-                    appendMessage('Error', 'Failed to send message: ' + error.message, true);
-                });
-            }
-        }
-
-        sendButton.addEventListener('click', sendMessage);
-        chatInput.addEventListener('keypress', function(e) {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                sendMessage();
-            }
-        });
-
-        modelSelect.addEventListener('change', function() {
-            currentModel = modelSelect.value;
-            appendMessage('System', `Changed model to ${currentModel}`);
-        });
-
-        // Theme toggle functionality
-        function setTheme(theme) {
-            document.documentElement.setAttribute('data-theme', theme);
-            localStorage.setItem('theme', theme);
-            themeToggle.textContent = theme === 'light' ? '💡' : '🌙';
-        }
-
-        themeToggle.addEventListener('click', () => {
-            const currentTheme = document.documentElement.getAttribute('data-theme');
-            const newTheme = currentTheme === 'light' ? 'dark' : 'light';
-            setTheme(newTheme);
-        });
-
-        // Check for saved theme preference or use system preference
-        const savedTheme = localStorage.getItem('theme');
-        if (savedTheme) {
-            setTheme(savedTheme);
-        } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-            setTheme('dark');
-        } else {
-            setTheme('light');
-        }
-
-        // Listen for system theme changes
-        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
-            if (!localStorage.getItem('theme')) {
-                setTheme(e.matches ? 'dark' : 'light');
-            }
-        });
-    </script>
+    <!-- Loading Indicator -->
+    <div id="loading" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center">
+        <div class="bg-white dark:bg-gray-800 rounded-lg p-4 flex items-center space-x-3">
+            <div class="animate-spin rounded-full h-6 w-6 border-b-2 border-primary"></div>
+            <span class="text-gray-900 dark:text-gray-100">Processing...</span>
+        </div>
+    </div>
 </body>
+
 </html>

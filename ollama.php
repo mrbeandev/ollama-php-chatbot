@@ -1,206 +1,333 @@
 <?php
 /**
- * Ollama PHP Chatbot
+ * Ollama PHP Client
  *
- * This file contains the implementation of the Ollama PHP Chatbot.
- * The chatbot is designed to handle user interactions and provide
- * appropriate responses based on the input received.
- * 
- * Conversations are saved daily in files named with the format (yyyy-mm-dd.txt)
+ * This class provides a PHP interface for interacting with the Ollama API.
+ * It allows for model management, chat interactions, and various utility functions.
  *
- * @package OllamaPHPChatbot
- * @version 1.0
- * @license MIT License
+ * @package OllamaPHPClient
+ * @version 1.0.0
+ * @author Mrbeandev
+ * @license MIT
  */
 class Ollama {
-    private $debug = false; // DEBUG
-    private $models;
-    private $apiUrl = 'http://localhost:11434/api/generate';
+    private $debug = false;
+    private $models = [];
+    private $baseUrl = 'http://localhost:11434/api';
+    private $modelCache = [];
+    private $promptTemplates = [
+        'general' => ['role' => 'system', 'content' => 'You are a helpful assistant.'],
+        'coder' => ['role' => 'system', 'content' => 'You are an expert programmer. Provide clear, secure, and efficient code.'],
+        'analyst' => ['role' => 'system', 'content' => 'You are a data analyst. Provide detailed analysis and insights.'],
+        'teacher' => ['role' => 'system', 'content' => 'You are a patient teacher. Explain concepts clearly and thoroughly.'],
+        'creative' => ['role' => 'system', 'content' => 'You are a creative writer. Think outside the box and be imaginative.']
+    ];
 
-    // Constructor
+    /**
+     * Constructor for the Ollama class.
+     *
+     * @param bool $debug Enable debug mode for additional logging
+     */
     public function __construct($debug = false) {
         $this->debug = $debug;
         $this->loadModels();
     }
 
-    // Load the list of available models
+    /**
+     * Load available models from the Ollama API.
+     *
+     * @throws Exception if unable to fetch or parse model data
+     */
     private function loadModels() {
-        $command = $this->getOllamaListCommand();
-        if ($this->debug)
-        {
-            echo "command=".$command;
-            echo "loadModels--command--".$output;
-        }
-        $output = $this->executeCommand($command);
-        if ($this->debug)
-        {
-            echo "command=".$command;
-            echo "loadModels--output--".$output;
-        }
-        if ($output === false) {
-            throw new Exception("Failed to execute Ollama list command. Please ensure Ollama is installed and accessible.");
-        }
-        $this->models = $this->parseOllamaOutput($output);
-    }
+        try {
+            $ch = curl_init($this->baseUrl . '/tags');
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            $response = curl_exec($ch);
 
-    // Get the appropriate command to list Ollama models based on the operating system
-    private function getOllamaListCommand() {
-        if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
-            // Windows command
-            if ($this->debug)
-            {
-                echo "<h1>WIN</h1>";
+            if (curl_errno($ch)) {
+                throw new Exception('Failed to get models: ' . curl_error($ch));
             }
-            return 'ollama list';
-        } else {
-            // Linux/Unix command
-            if ($this->debug)
-            {
-                echo "<h1>LINUX</h1>";
+
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            curl_close($ch);
+
+            if ($httpCode !== 200) {
+                throw new Exception("HTTP Error: $httpCode");
             }
-            return 'HOME=${HOME:-/root} ollama list 2>&1';
-        }
-    }
 
-    // Execute a shell command safely and return its output
-    private function executeCommand($command) {
-        $output = shell_exec($command);
-        if ($output === null && !empty(error_get_last())) {
-            error_log("Error executing command: " . $command . ". Error: " . print_r(error_get_last(), true));
-            return false;
-        }
-        if ($this->debug) {
-            error_log("Raw output from Ollama command: " . $output);
-        }
-        return $output;
-    }
+            $data = json_decode($response, true);
+            if (!isset($data['models'])) {
+                throw new Exception('Invalid response format from Ollama API');
+            }
 
-    // Parse the output of the Ollama list command
-    private function parseOllamaOutput($output) {
-        $models = [];
-        $lines = explode("\n", trim($output));
-        if ($this->debug)
-        {
-            echo "<pre>";
-            print_r($lines);
-            echo "</pre>";
-        }
-       
-        // Skip the header line
-        array_shift($lines);
-        
-        foreach ($lines as $line) {
-            $line = trim($line);
-            if (empty($line)) continue;
-            
-            // FIXME: Parse the line using tab as delimiter. But ins linux there is no tab
-            $line=str_replace("        ","\t",$line);
-            $line=str_replace("       ","\t",$line);
-            $line=str_replace("      ","\t",$line);
-            $line=str_replace("     ","\t",$line);
-            $line=str_replace("    ","\t",$line);
-            $line=str_replace("   ","\t",$line);
-            $line=str_replace("  ","\t",$line);
-            $line=str_replace(" ","\t",$line);
-            $parts = explode("\t", $line);
-            if (count($parts) >= 4) {
-                $modelName = trim($parts[0]);
-                $modelSize = trim($parts[2]);
-                $modelModified = trim($parts[3]);
-                
-                $models[] = [
-                    'name' => $modelName,
-                    'description' => "Size: $modelSize, Modified: $modelModified"
+            $this->models = array_map(function($model) {
+                return [
+                    'name' => $model['name'],
+                    'description' => "Size: {$model['size']}, Modified: {$model['modified_at']}"
                 ];
+            }, $data['models']);
+
+            if ($this->debug) {
+                error_log("Models loaded: " . print_r($this->models, true));
             }
+
+        } catch (Exception $e) {
+            error_log("Error loading models: " . $e->getMessage());
+            $this->models = [];
+            throw $e;
         }
-        
-        if (empty($models)) {
-            error_log("No valid models found in Ollama output: " . $output);
-        }
-        
-        return $models;
     }
 
-    // Get a list of available models
+    /**
+     * Unload a model from memory.
+     *
+     * @param string $modelName Name of the model to unload
+     * @return bool True if successful, throws exception otherwise
+     * @throws Exception if unloading fails
+     */
+    public function unloadModel($modelName) {
+        try {
+            $ch = curl_init($this->baseUrl . '/generate');
+            curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_POST => true,
+                CURLOPT_POSTFIELDS => json_encode([
+                    'model' => $modelName,
+                    'prompt' => '',
+                    'keep_alive' => '0s'
+                ]),
+                CURLOPT_HTTPHEADER => ['Content-Type: application/json']
+            ]);
+
+            $response = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            curl_close($ch);
+
+            if ($httpCode !== 200) {
+                throw new Exception("Failed to unload model: HTTP $httpCode");
+            }
+
+            // Clear model from cache
+            unset($this->modelCache[$modelName]);
+            return true;
+
+        } catch (Exception $e) {
+            error_log("Error unloading model: " . $e->getMessage());
+            throw $e;
+        }
+    }
+
+    /**
+     * Get detailed information about a specific model.
+     *
+     * @param string $modelName Name of the model
+     * @return array|null Model information or null if not found
+     */
+    public function getModelInfo($modelName) {
+        if (isset($this->modelCache[$modelName])) {
+            return $this->modelCache[$modelName];
+        }
+
+        try {
+            $ch = curl_init($this->baseUrl . '/show');
+            curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_POST => true,
+                CURLOPT_POSTFIELDS => json_encode(['model' => $modelName]),
+                CURLOPT_HTTPHEADER => ['Content-Type: application/json']
+            ]);
+
+            $response = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            curl_close($ch);
+
+            if ($httpCode !== 200) {
+                throw new Exception("Failed to get model info: HTTP $httpCode");
+            }
+
+            $modelInfo = json_decode($response, true);
+            $this->modelCache[$modelName] = $modelInfo;
+            return $modelInfo;
+
+        } catch (Exception $e) {
+            error_log("Error getting model info: " . $e->getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Get a list of all available models.
+     *
+     * @return array List of available models
+     */
     public function getModelList() {
         return $this->models;
     }
 
-    // Generate a response from the Ollama API
-    public function generateResponse($modelName, $prompt) {
-        $data = [
-            'model' => $modelName,
-            'prompt' => $prompt,
-            'stream' => false
-        ];
+    /**
+     * Generate a response using the specified model and prompt.
+     *
+     * @param string $modelName Name of the model to use
+     * @param string $prompt User's input prompt
+     * @param string $context Optional context for the conversation
+     * @param string $template Optional template to use (default: 'general')
+     * @return string Generated response
+     * @throws Exception if response generation fails
+     */
+    public function generateResponse($modelName, $prompt, $context = '', $template = 'general') {
+        try {
+            // Prepare messages array with template
+            $messages = [];
+            
+            // Add template if specified
+            if (isset($this->promptTemplates[$template])) {
+                $messages[] = $this->promptTemplates[$template];
+            }
 
-        $ch = curl_init($this->apiUrl);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
-        curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+            // Add custom context if provided
+            if (!empty($context)) {
+                $messages[] = [
+                    'role' => 'system',
+                    'content' => $context
+                ];
+            }
 
-        $response = curl_exec($ch);
+            // Add user message
+            $messages[] = [
+                'role' => 'user',
+                'content' => $prompt
+            ];
 
-        if (curl_errno($ch)) {
-            error_log('Failed to generate response: ' . curl_error($ch));
-            throw new Exception('Failed to generate response: ' . curl_error($ch));
+            $data = [
+                'model' => $modelName,
+                'messages' => $messages,
+                'stream' => false,
+                'options' => [
+                    'temperature' => 0.7,
+                    'top_p' => 0.9,
+                    'frequency_penalty' => 0.1
+                ]
+            ];
+
+            $ch = curl_init($this->baseUrl . '/chat');
+            curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_POST => true,
+                CURLOPT_POSTFIELDS => json_encode($data),
+                CURLOPT_HTTPHEADER => ['Content-Type: application/json']
+            ]);
+
+            $response = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            
+            if (curl_errno($ch)) {
+                throw new Exception('Curl error: ' . curl_error($ch));
+            }
+            curl_close($ch);
+
+            if ($httpCode !== 200) {
+                throw new Exception("HTTP Error: $httpCode");
+            }
+
+            $responseData = json_decode($response, true);
+            if (!isset($responseData['message']['content'])) {
+                throw new Exception('Invalid API response format');
+            }
+
+            // Return only the content since that's what the frontend expects
+            return $responseData['message']['content'];
+
+        } catch (Exception $e) {
+            error_log("Error generating response: " . $e->getMessage());
+            throw $e;
         }
+    }
 
+    /**
+     * Handle various actions on models (e.g., unloading).
+     *
+     * @param string $action Action to perform
+     * @param string $modelName Name of the model
+     * @return mixed Result of the action
+     * @throws Exception for unknown actions
+     */
+    public function handleAction($action, $modelName) {
+        switch ($action) {
+            case 'unload':
+                return $this->unloadModel($modelName);
+            default:
+                throw new Exception("Unknown action: $action");
+        }
+    }
+
+    /**
+     * Get available prompt templates.
+     *
+     * @return array List of available prompt template names
+     */
+    public function getPromptTemplates() {
+        return array_keys($this->promptTemplates);
+    }
+
+    /**
+     * Add a custom prompt template.
+     *
+     * @param string $name Name of the new template
+     * @param string $content Content of the template
+     */
+    public function addPromptTemplate($name, $content) {
+        $this->promptTemplates[$name] = [
+            'role' => 'system',
+            'content' => $content
+        ];
+    }
+
+    /**
+     * Get debug information about the current state.
+     *
+     * @return array Debug information
+     */
+    public function getDebugInfo() {
+        try {
+            return [
+                'models' => $this->models,
+                'running_models' => $this->getRunningModels(),
+                'api_status' => $this->checkApiStatus(),
+                'cache_status' => [
+                    'models_cached' => count($this->modelCache),
+                    'memory_usage' => memory_get_usage(true)
+                ]
+            ];
+        } catch (Exception $e) {
+            return ['error' => $e->getMessage()];
+        }
+    }
+
+    // Get list of running models using /api/ps endpoint
+    private function getRunningModels() {
+        $ch = curl_init($this->baseUrl . '/ps');
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        $response = curl_exec($ch);
+        curl_close($ch);
+
+        if ($response) {
+            return json_decode($response, true);
+        }
+        return null;
+    }
+
+    // Check if API is accessible
+    private function checkApiStatus() {
+        $ch = curl_init($this->baseUrl . '/tags');
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        $response = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
 
-        if ($httpCode !== 200) {
-            error_log("HTTP Error: $httpCode. Response: $response");
-            throw new Exception("HTTP Error: $httpCode");
-        }
-
-        $responseData = json_decode($response, true);
-        if (isset($responseData['response'])) {
-            return $responseData['response'];
-        } else {
-            error_log('Invalid response from Ollama API: ' . $response);
-            throw new Exception('Invalid response from Ollama API: ' . $response);
-        }
-    }
-
-    // Get debug information
-    public function getDebugInfo() {
         return [
-            'raw_output' => $this->executeCommand($this->getOllamaListCommand()),
-            'parsed_models' => $this->models,
-            'os' => PHP_OS,
-            'command' => $this->getOllamaListCommand(),
-            'home_env' => getenv('HOME'),
-            'current_user' => get_current_user(),
-            'php_user' => exec('whoami')
+            'code' => $httpCode,
+            'accessible' => ($httpCode === 200)
         ];
-    }
-}
-
-// Test the Ollama class
-if (php_sapi_name() === 'cli') {
-    try {
-        $ollama = new Ollama(true);  // Enable debug mode
-        $models = $ollama->getModelList();
-        echo "Installed Ollama models:\n";
-        foreach ($models as $model) {
-            echo "{$model['name']} - {$model['description']}\n";
-        }
-        
-        // Print debug info
-        $debugInfo = $ollama->getDebugInfo();
-        echo "\nDebug Information:\n";
-        echo "Raw output: " . $debugInfo['raw_output'] . "\n";
-        echo "Parsed models: " . print_r($debugInfo['parsed_models'], true) . "\n";
-        echo "OS: " . $debugInfo['os'] . "\n";
-        echo "Command: " . $debugInfo['command'] . "\n";
-        echo "HOME env: " . $debugInfo['home_env'] . "\n";
-        echo "Current user: " . $debugInfo['current_user'] . "\n";
-        echo "PHP user: " . $debugInfo['php_user'] . "\n";
-    } catch (Exception $e) {
-        echo "Error: " . $e->getMessage() . "\n";
     }
 }
 
