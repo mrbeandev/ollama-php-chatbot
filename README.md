@@ -177,3 +177,7 @@ ollama-php-chatbot/
 > [!IMPORTANT]
 > Always backup your conversations before updating.
 
+## 👨‍💻 Developer Contact
+
+- Telegram: [@mrbeadev](https://t.me/mrbeandev)
+
