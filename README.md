@@ -179,5 +179,5 @@ ollama-php-chatbot/
 
 ## 👨‍💻 Developer Contact
 
-- Telegram: [@mrbeadev](https://t.me/mrbeandev)
+- Telegram: [@mrbeandev](https://t.me/mrbeandev)
 
