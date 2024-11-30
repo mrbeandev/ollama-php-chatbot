@@ -22,7 +22,7 @@
 1. ✅ Ensure you have Ollama installed and running locally
 2. 📂 Clone this repository:
 ```bash
-git clone https://github.com/yourusername/ollama-php-chatbot.git
+git clone https://github.com/mrbeandev/ollama-php-chatbot.git
 cd ollama-php-chatbot
 chmod 777 conversations
 ```
